@@ -1,0 +1,10 @@
+{
+  "name": "safeeats-proxy",
+  "version": "1.0.0",
+  "description": "SafeEats city-isolated food inspection proxy API",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "license": "ISC"
+}
