@@ -52,7 +52,7 @@ export default async function handler(req, res) {
   }
 
   out.generate = {};
-  for (const model of ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"]) {
+  for (const model of ["gemini-3.6-flash", "gemini-flash-latest"]) {
     for (const search of [false, true]) {
       const label = `${model}${search ? "+search" : ""}`;
       try {

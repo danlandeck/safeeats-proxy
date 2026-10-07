@@ -147,7 +147,7 @@ const GEMINI_MODELS = [
   process.env.GEMINI_MODEL,
   "gemini-3.6-flash",
   "gemini-3.5-flash",
-  "gemini-2.5-flash",
+  "gemini-flash-latest",
 ].filter(Boolean);
 
 function emptyResult(schema) {
