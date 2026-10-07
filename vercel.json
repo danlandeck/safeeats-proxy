@@ -10,6 +10,9 @@
     },
     "api/llmRestaurantSearch.js": {
       "maxDuration": 60
+    },
+    "api/diag.js": {
+      "maxDuration": 60
     }
   },
   "headers": [
