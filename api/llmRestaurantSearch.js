@@ -139,21 +139,53 @@ function toList(body) {
  * @param {boolean} useSearch - whether to enable Google Search grounding (replaces add_context_from_internet)
  * @param {object} schema - JSON schema for structured output
  */
-async function callGemini(prompt, useSearch, schema) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
 
-  // Use gemini-2.0-flash for all tasks (fast, capable, free tier)
-  const model = "gemini-2.0-flash";
+// Models are tried in order; a retired or unknown model (404) falls through to
+// the next one. Set GEMINI_MODEL in Vercel to pin a specific model first.
+// gemini-2.0-flash was shut down on June 1, 2026, which broke every call here.
+const GEMINI_MODELS = [
+  process.env.GEMINI_MODEL,
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-2.5-flash",
+].filter(Boolean);
+
+function emptyResult(schema) {
+  return schema.properties.restaurants ? { restaurants: [] } : { inspections: [] };
+}
+
+// Pull a JSON object out of model text: strips code fences, then falls back to
+// the outermost {...} when the model wraps the JSON in prose.
+function parseModelJson(text, schema) {
+  const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch { /* fall through */ }
+  const first = cleaned.indexOf("{");
+  const last = cleaned.lastIndexOf("}");
+  if (first !== -1 && last > first) {
+    try {
+      return JSON.parse(cleaned.slice(first, last + 1));
+    } catch { /* fall through */ }
+  }
+  return emptyResult(schema);
+}
+
+async function geminiRequest(model, apiKey, prompt, useSearch, schema, structured) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   const requestBody = {
-    contents: [{ parts: [{ text: prompt }] }],
+    contents: [{
+      parts: [{
+        text: structured
+          ? prompt
+          : `${prompt}\n\nRespond with ONLY a JSON object matching this JSON schema, no prose:\n${JSON.stringify(schema)}`,
+      }],
+    }],
     generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: schema,
       temperature: 0.2,
       maxOutputTokens: 8192,
+      ...(structured ? { responseMimeType: "application/json", responseSchema: schema } : {}),
     },
   };
 
@@ -162,33 +194,50 @@ async function callGemini(prompt, useSearch, schema) {
     requestBody.tools = [{ google_search: {} }];
   }
 
-  const res = await fetch(url, {
+  return fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(requestBody),
   });
+}
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Gemini API ${res.status}: ${errText.slice(0, 500)}`);
+async function callGemini(prompt, useSearch, schema) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
+
+  let lastError = "no Gemini model available";
+
+  for (const model of GEMINI_MODELS) {
+    let res = await geminiRequest(model, apiKey, prompt, useSearch, schema, true);
+
+    // Some models reject a forced JSON schema combined with search grounding.
+    // Retry once asking for JSON in the prompt instead.
+    if (res.status === 400 && useSearch) {
+      res = await geminiRequest(model, apiKey, prompt, useSearch, schema, false);
+    }
+
+    if (res.status === 404) {
+      lastError = `Gemini API 404: model ${model} not available`;
+      continue;
+    }
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Gemini API ${res.status} (${model}): ${errText.slice(0, 500)}`);
+    }
+
+    const data = await res.json();
+
+    // Grounded responses can split the answer across several text parts.
+    const text = (data.candidates?.[0]?.content?.parts || [])
+      .map((p) => p.text || "")
+      .join("");
+    if (!text.trim()) return emptyResult(schema);
+
+    return parseModelJson(text, schema);
   }
 
-  const data = await res.json();
-
-  // Extract the text content from Gemini's response
-  const textPart = data.candidates?.[0]?.content?.parts?.find((p) => p.text);
-  if (!textPart?.text) {
-    return schema.properties.restaurants ? { restaurants: [] } : { inspections: [] };
-  }
-
-  // Parse the JSON response
-  try {
-    // Strip markdown code fences if present
-    const cleaned = textPart.text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-    return JSON.parse(cleaned);
-  } catch {
-    return schema.properties.restaurants ? { restaurants: [] } : { inspections: [] };
-  }
+  throw new Error(lastError);
 }
 
 // ── Main handler ─────────────────────────────────────────────────────────────
